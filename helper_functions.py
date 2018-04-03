@@ -19,7 +19,7 @@ from sklearn.exceptions import NotFittedError
 
 # Modelling Helpers
 from sklearn.preprocessing import Imputer , Normalizer , scale
-from sklearn.cross_validation import train_test_split , StratifiedKFold
+from sklearn.model_selection import train_test_split 
 
 # Visualisation
 import matplotlib as mpl
@@ -32,6 +32,10 @@ import seaborn as sns
 mpl.style.use( 'ggplot' )
 sns.set_style( 'white' )
 pylab.rcParams[ 'figure.figsize' ] = 8 , 6
+
+# Set seed for reproduceability
+import random
+random.seed(21)
 
 def plot_histograms( df , variables , n_rows , n_cols ):
     fig = plt.figure( figsize = ( 16 , 12 ) )
@@ -52,12 +56,12 @@ def plot_distribution( df , var , target , **kwargs ):
     facet.set( xlim=( 0 , df[ var ].max() ) )
     facet.add_legend()
 
-def plot_categories( df , cat , target , **kwargs ):
-    row = kwargs.get( 'row' , None )
-    col = kwargs.get( 'col' , None )
-    facet = sns.FacetGrid( df , row = row , col = col )
-    facet.map( sns.barplot , cat , target )
-    facet.add_legend()
+def plot_categories( df , cat , target):
+    tmp = df.groupby(cat).sum()
+    tmp = tmp / df.shape[0]
+    tmp.plot(y=target, kind='bar', figsize=(8,6))
+
+
 
 def plot_correlation_map( df ):
     corr = df.corr()
@@ -87,7 +91,7 @@ def plot_variable_importance( X , y ):
     tree = DecisionTreeClassifier( random_state = 99 )
     tree.fit( X , y )
     plot_model_var_imp( tree , X , y )
-    
+
 def plot_model_var_imp( model , X , y ):
     imp = pd.DataFrame( 
         model.feature_importances_  , 
@@ -95,11 +99,113 @@ def plot_model_var_imp( model , X , y ):
         index = X.columns 
     )
     imp = imp.sort_values( [ 'Importance' ] , ascending = True )
-    imp[ : 10 ].plot( kind = 'barh' )
-    print (model.score( X , y ))
+    ax = imp[ : 20 ].plot( kind = 'barh' , figsize=(8,6))
+    ax.legend(loc="lower right")
     
+def extract_titles(df):
+    title = pd.DataFrame()
+    # we extract the title from each name
+    title[ 'Title' ] = df[ 'Name' ].map( lambda name: name.split( ',' )[1].split( '.' )[0].strip() )
 
+    # a map of more aggregated titles
+    Title_Dictionary = {
+                        "Capt":       "Officer",
+                        "Col":        "Officer",
+                        "Major":      "Officer",
+                        "Jonkheer":   "Royalty",
+                        "Don":        "Royalty",
+                        "Sir" :       "Royalty",
+                        "Dr":         "Officer",
+                        "Rev":        "Officer",
+                        "the Countess":"Royalty",
+                        "Dona":       "Royalty",
+                        "Mme":        "Mrs",
+                        "Mlle":       "Miss",
+                        "Ms":         "Mrs",
+                        "Mr" :        "Mr",
+                        "Mrs" :       "Mrs",
+                        "Miss" :      "Miss",
+                        "Master" :    "Master",
+                        "Lady" :      "Royalty"
+
+                        }
+
+    # we map each title
+    title[ 'Title' ] = title.Title.map( Title_Dictionary )
+    title = pd.get_dummies( title.Title )
     
+    return title
+
+def extract_cabin(df):
+    
+    cabin = pd.DataFrame()
+
+    # replacing missing cabins with U (for Uknown)
+    cabin[ 'Cabin' ] = df.Cabin.fillna( 'U' )
+
+    # mapping each Cabin value with the cabin letter
+    cabin[ 'Cabin' ] = cabin[ 'Cabin' ].map( lambda c : c[0] )
+
+    # dummy encoding ...
+    cabin = pd.get_dummies( cabin['Cabin'] , prefix = 'Cabin' )
+    
+    return cabin
+
+def extract_ticket(df):
+    # a function that extracts each prefix of the ticket, returns 'XXX' if no prefix (i.e the ticket is a digit)
+    def cleanTicket( ticket ):
+        ticket = ticket.replace( '.' , '' )
+        ticket = ticket.replace( '/' , '' )
+        ticket = ticket.split()
+        ticket = map( lambda t : t.strip() , ticket )
+        ticket = list(filter( lambda t : not t.isdigit() , ticket ))
+        if len( ticket ) > 0:
+            return ticket[0]
+        else: 
+            return 'XXX'
+
+    ticket = pd.DataFrame()
+
+    # Extracting dummy variables from tickets:
+    ticket[ 'Ticket' ] = df[ 'Ticket' ].map( cleanTicket )
+    ticket = pd.get_dummies( ticket[ 'Ticket' ] , prefix = 'Ticket' )
+
+    return ticket
+
+def extract_family(df):
+    family = pd.DataFrame()
+
+    # introducing a new feature : the size of families (including the passenger)
+    family[ 'FamilySize' ] = df[ 'Parch' ] + df[ 'SibSp' ] + 1
+
+    # introducing other features based on the family size
+    family[ 'Family_Single' ] = family[ 'FamilySize' ].map( lambda s : 1 if s == 1 else 0 )
+    family[ 'Family_Small' ]  = family[ 'FamilySize' ].map( lambda s : 1 if 2 <= s <= 4 else 0 )
+    family[ 'Family_Large' ]  = family[ 'FamilySize' ].map( lambda s : 1 if 5 <= s else 0 )
+    
+    return family
+
+def get_validation_score(X_valid, y_valid, model):
+    
+    try:
+        model.predict(X_valid.sample(1))
+    except NotFittedError as e:
+        print('You need to fit the model, please go to step 4.2.')
+        return
+    
+    preds = pd.DataFrame()
+
+    preds['label'] = y_valid
+    preds['prob'] = model.predict_proba(X_valid)[:,1]
+
+
+    plt.figure(figsize=(8,6))
+    ax = sns.distplot( preds.loc[preds.label==0].prob, bins=10, label='died')
+    sns.distplot( preds.loc[preds.label==1].prob, bins=10, ax=ax, label='survived', axlabel='probability of survival')
+    ax.legend()
+    
+    print ("validation score: %s" % model.score( X_valid , y_valid ))
+
 def plot_partial_dependence( model , X , y , features, grid_resolution=100):
     
     try:
@@ -154,4 +260,15 @@ def plot_partial_dependence( model , X , y , features, grid_resolution=100):
             ax.set_ylabel(features[1])
             ax.set_zlabel('probability of survival')
             plt.show()
- 
+            
+            
+def get_score(X_test, model):
+    
+    try:
+        model.predict(X_test.sample(1))
+    except NotFittedError as e:
+        print('You need to fit the model, please go to step 4.2.')
+        return
+        
+    y_test = pd.read_csv("y_test.csv").Survived
+    print ("test score: %s" % model.score( X_test , y_test))
